@@ -3,6 +3,8 @@ package sofia
 import (
 	"bytes"
 	"encoding/binary"
+	"encoding/hex"
+	"fmt"
 )
 
 /*
@@ -21,9 +23,9 @@ type LoginReq struct {
 type LoginRes struct {
 	AliveInterval int    `json:"AliveInterval"`
 	ChannelNum    int    `json:"ChannelNum"`
-	DeviceType    string `json:"DeviceType "`
+	DeviceType    string `json:"DeviceType "` // Notice the extra space before closing ", ate my whole day!
 	ExtraChannel  int    `json:"ExtraChannel"`
-	Ret           int    `json:"Ret"`
+	Ret           uint32 `json:"Ret"`
 	SessionID     string `json:"SessionID"`
 }
 
@@ -35,10 +37,45 @@ type CmdReq struct {
 	SessionID string // Session ID
 }
 
+type CmdRes struct {
+	Name      string `json: "Name"`      // Command name
+	Ret       uint32 `json: "Ret"`       // Return code
+	SessionID string `json: "SessionID"` // Session ID
+}
+
+type SysInfo struct {
+	Name       string // Command name
+	Ret        uint32 // Return code
+	SessionID  string // Session ID
+	SystemInfo struct {
+		AlarmInChannel  int
+		AlarmOutChannel int
+		AudioInChannel  int
+		BuildTime       string
+		CombineSwitch   int
+		DeviceModel     string
+		DeviceRunTime   string
+		DeviceType      int
+		DigChannel      int
+		EncryptVersion  string
+		ExtraChannel    int
+		HardWare        string
+		HardWareVersion string
+		SerialNo        string
+		SoftWareVersion string
+		TalkInChannel   int
+		TalkOutChannel  int
+		UpdataTime      string
+		UpdataType      string
+		VideoInChannel  int
+		VideoOutChannel int
+	}
+}
+
 /*
  *
  */
-func MakeMessage(msg *bytes.Buffer, data []byte, msgId uint16) {
+func EncodeMessage(msg *bytes.Buffer, data []byte, msgId uint16) {
 	msg.Reset()
 
 	encMsgId := make([]byte, 2)
@@ -62,4 +99,28 @@ func MakeMessage(msg *bytes.Buffer, data []byte, msgId uint16) {
 	msg.Write(encMsgLen)                            // Data length
 	msg.Write(data)                                 // Data
 	msg.WriteByte(0x0A)                             // ASCII LF as terminator
+}
+
+/*
+ *
+ */
+func DecodeMessage(msg *bytes.Buffer) (byte, uint16, uint16, []byte) {
+	// Duplicate buffer
+	rawBytes := msg.Bytes()
+
+	// Session ID is at offset +4
+	sessionID := rawBytes[4]
+
+	// Message ID is at offset +14
+	msgID := binary.LittleEndian.Uint16(rawBytes[14:])
+
+	// Data length is at offset +15
+	dataLen := binary.LittleEndian.Uint16(rawBytes[15:])
+
+	// Data is at offset +20 with last 2 bytes truncated
+	data := rawBytes[20 : len(rawBytes)-2]
+
+	fmt.Printf("%s\n\n", hex.Dump(data))
+
+	return sessionID, msgID, dataLen, data
 }
