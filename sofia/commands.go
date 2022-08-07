@@ -3,7 +3,7 @@ package sofia
 const (
 	LOGIN_REQ1                     = 999
 	LOGIN_REQ2                     = 1000
-	LOGIN_RSP                      = 1000
+	LOGIN_RSP                      = 1001
 	LOGOUT_REQ                     = 1001
 	LOGOUT_RSP                     = 1002
 	FORCELOGOUT_REQ                = 1003

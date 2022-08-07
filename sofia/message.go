@@ -8,20 +8,31 @@ import (
 /*
  *
  */
-type LoginMsg struct {
-	EncryptType string
-	LoginType   string
-	PassWord    string
-	UserName    string
+type LoginReq struct {
+	EncryptType string // Encryption type, always MD5
+	LoginType   string // Client identifier
+	PassWord    string // Password, default is empty
+	UserName    string // Username, default is admin
 }
 
+/*
+ *
+ */
 type LoginRes struct {
 	AliveInterval int    `json:"AliveInterval"`
 	ChannelNum    int    `json:"ChannelNum"`
-	DeviceType    string `json:"DeviceType"`
+	DeviceType    string `json:"DeviceType "`
 	ExtraChannel  int    `json:"ExtraChannel"`
 	Ret           int    `json:"Ret"`
 	SessionID     string `json:"SessionID"`
+}
+
+/*
+ *
+ */
+type CmdReq struct {
+	Name      string // Command name
+	SessionID string // Session ID
 }
 
 /*
