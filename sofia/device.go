@@ -49,8 +49,8 @@ func NewDevice() *Device {
 /*
  *
  */
-func DeleteDevice(device *Device) {
-
+func DeleteDevice(dev *Device) {
+	dev.Disconnect()
 }
 
 /*
@@ -220,6 +220,138 @@ func (dev *Device) SystemInfoResponse() SysInfo {
 	if msgId != SYSINFO_RSP {
 		fmt.Printf("2 %d\n", msgId)
 		return SysInfo{}
+	}
+
+	return res
+}
+
+func (dev *Device) SystemAbility(s *Session) (SysAbility, error) {
+	// Clear buffer
+	dev.reqBuf.Reset()
+
+	data := CmdReq{
+		Name:      "SystemFunction",
+		SessionID: *s.IDStr(),
+	}
+
+	// Marshal data to JSON
+	encodedData, _ := json.Marshal(data)
+
+	// Encode message
+	EncodeMessage(dev.reqBuf, encodedData, ABILITY_GET)
+
+	// Send message
+	if _, err := dev.conn.Write(dev.reqBuf.Bytes()); err != nil {
+		return SysAbility{}, err
+	}
+
+	return dev.SystemAbilityResponse(), nil
+}
+
+func (dev *Device) SystemAbilityResponse() SysAbility {
+	// Read response
+	_, msgId, _, data := dev.ReadMessage()
+
+	// Create a map
+	var res SysAbility
+
+	// Unmarshall data to JSON
+	if err := json.Unmarshal(data, &res); err != nil {
+		fmt.Printf("1 %s\n", err.Error())
+		return SysAbility{}
+	}
+
+	if msgId != ABILITY_GET_RSP {
+		fmt.Printf("2 %d\n", msgId)
+		return SysAbility{}
+	}
+
+	return res
+}
+
+func (dev *Device) SystemOEMInfo(s *Session) (SysOEMInfo, error) {
+	// Clear buffer
+	dev.reqBuf.Reset()
+
+	data := CmdReq{
+		Name:      "OEMInfo",
+		SessionID: *s.IDStr(),
+	}
+
+	// Marshal data to JSON
+	encodedData, _ := json.Marshal(data)
+
+	// Encode message
+	EncodeMessage(dev.reqBuf, encodedData, SYSINFO_REQ)
+
+	// Send message
+	if _, err := dev.conn.Write(dev.reqBuf.Bytes()); err != nil {
+		return SysOEMInfo{}, err
+	}
+
+	return dev.SystemOEMInfoResponse(), nil
+}
+
+func (dev *Device) SystemOEMInfoResponse() SysOEMInfo {
+	// Read response
+	_, msgId, _, data := dev.ReadMessage()
+
+	// Create a map
+	var res SysOEMInfo
+
+	// Unmarshall data to JSON
+	if err := json.Unmarshal(data, &res); err != nil {
+		fmt.Printf("1 %s\n", err.Error())
+		return SysOEMInfo{}
+	}
+
+	if msgId != SYSINFO_RSP {
+		fmt.Printf("2 %d\n", msgId)
+		return SysOEMInfo{}
+	}
+
+	return res
+}
+
+func (dev *Device) SystemConfig(s *Session, what string) (SysConfig, error) {
+	// Clear buffer
+	dev.reqBuf.Reset()
+
+	data := CmdReq{
+		Name:      what,
+		SessionID: *s.IDStr(),
+	}
+
+	// Marshal data to JSON
+	encodedData, _ := json.Marshal(data)
+
+	// Encode message
+	EncodeMessage(dev.reqBuf, encodedData, CONFIG_GET)
+
+	// Send message
+	if _, err := dev.conn.Write(dev.reqBuf.Bytes()); err != nil {
+		return SysConfig{}, err
+	}
+
+	return dev.SystemConfigResponse(), nil
+}
+
+func (dev *Device) SystemConfigResponse() SysConfig {
+	// Read response
+	_, msgId, _, data := dev.ReadMessage()
+
+	// Create a map
+	var res SysConfig
+
+	// Unmarshall data to JSON
+	if err := json.Unmarshal(data, &res); err != nil {
+		fmt.Printf("1 %s\n", err.Error())
+		return SysConfig{}
+	}
+
+	if msgId != CONFIG_GET_RSP {
+		fmt.Printf("2 %d\n", msgId)
+		return SysConfig{}
 	}
 
 	return res

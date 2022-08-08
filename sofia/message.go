@@ -72,6 +72,15 @@ type SysInfo struct {
 	}
 }
 
+type SysAbility struct {
+}
+
+type SysOEMInfo struct {
+}
+
+type SysConfig struct {
+}
+
 /*
  *
  */
