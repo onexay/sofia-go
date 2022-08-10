@@ -1,4 +1,4 @@
-package sofia
+package sofia2
 
 const (
 	LOGIN_REQ1                     = 999

@@ -1,0 +1,34 @@
+
+"device": {
+    "numSessions": 4,
+    "sessions": [
+        // Unique local socket
+        {
+            "host": "",
+            "port": "",
+            "username": "",
+            "password": ""
+        },
+        // Unique local socket
+        {
+            "host": "",
+            "port": "",
+            "username": "",
+            "password": ""
+        },
+        // Unique local socket
+        {
+            "host": "",
+            "port": "",
+            "username": "",
+            "password": ""
+        },
+        // Unique local socket
+        {
+            "host": "",
+            "port": "",
+            "username": "",
+            "password": ""
+        },                        
+    ]
+}

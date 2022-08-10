@@ -1,66 +1,121 @@
 package sofia
 
-/* Device
- *
- * A device is a resource which supports multiple user accounts and thus by
- * extension can support multiple active sessions. However, the sematics of
- * SOFIA server running on device allocates a session index for each unique
- * login instance.
- */
-
 import (
+	"bufio"
 	"bytes"
-	"encoding/json"
-	"fmt"
+	"encoding/binary"
 	"io"
 	"net"
+	"os"
+	"time"
+
+	"github.com/sirupsen/logrus"
+	"github.com/teris-io/shortid"
 )
 
-var msgEnd []byte = []byte{0x0A, 0x00}
-
-// Instance of device
+/*
+ *
+ */
 type Device struct {
-	conn     net.Conn          // Network connection
-	reqBuf   *bytes.Buffer     // Tx message buffer
-	resBuf   *bytes.Buffer     // Rx message buffer
-	sessions map[byte]*Session // Sessions
+	logger         *logrus.Logger      // Device scoped logger
+	rxBuf          *bytes.Buffer       // Receive buffer
+	txBuf          *bytes.Buffer       // Transmit buffer
+	host           string              // Host, IP address or hostname
+	port           string              // Port
+	connectTimeout time.Duration       // Connect timeout
+	connectRetries uint8               // Connect retries
+	transport      net.Conn            // Transport connection
+	idGen          *shortid.Shortid    // ID generator
+	sessions       map[byte]string     // Mapping session IDs
+	localSessions  map[string]*Session // Sessions
+	workerChan     chan error          // Device worker channel
 }
 
 /*
  *
  */
-func NewDevice() *Device {
+func (device *Device) WorkerChan() *chan error {
+	return &device.workerChan
+}
+
+/*
+ *
+ */
+func NewDevice(host string, port string, timeout uint16, retries uint8) *Device {
 	// Allocate a new device
-	device := new(Device)
+	var device *Device = new(Device)
 
-	// Allocate Tx message buffer
-	device.reqBuf = new(bytes.Buffer)
+	// Initialize and setup device logger
+	{
+		newLogger := logrus.New()
+		newLogger.SetFormatter(&logrus.JSONFormatter{})
+		newLogger.SetOutput(os.Stdout)
+		newLogger.SetLevel(logrus.DebugLevel)
+		device.logger = newLogger
+	}
 
-	// Allocate Rx message buffer
-	device.resBuf = new(bytes.Buffer)
+	// Allocate Rx and Tx buffers
+	{
+		device.rxBuf = new(bytes.Buffer)
+		device.txBuf = new(bytes.Buffer)
+	}
 
-	// Allocate map for sessions
-	device.sessions = make(map[byte]*Session, 0xFF)
+	// Setup connection parameters
+	{
+		device.host = host
+		device.port = port
+		device.connectTimeout = time.Second * time.Duration(timeout)
+		device.connectRetries = retries
+	}
 
-	// Return device
+	// Initialize sessions
+	{
+		device.idGen = shortid.GetDefault()
+		device.sessions = make(map[byte]string, 16)
+		device.localSessions = make(map[string]*Session, 16)
+	}
+
+	// Setup worker channel
+	{
+		device.workerChan = make(chan error)
+	}
+
 	return device
 }
 
 /*
  *
  */
-func DeleteDevice(dev *Device) {
-	dev.Disconnect()
+func DeleteDevice(device *Device) {
+
 }
 
 /*
  *
  */
-func (dev *Device) Connect(host string, port string) error {
-	var err error = nil
+func (device *Device) Connect() error {
+	// Try to connect to device
+	var err error
+	{
+		for try := 1; try <= int(device.connectRetries); try++ {
+			if device.transport, err = net.DialTimeout("tcp", device.host+":"+device.port, device.connectTimeout); err == nil {
+				device.logger.WithFields(
+					logrus.Fields{
+						"host": device.host + ":" + device.port,
+					}).Debug("Connected successfully in %d tries", try)
 
-	// Try connecting to device
-	dev.conn, err = net.Dial("tcp", host+":"+port)
+				// Start worker
+				go device.worker()
+
+				break
+			}
+
+			device.logger.WithFields(
+				logrus.Fields{
+					"host": device.host + ":" + device.port,
+				}).Debug("Unable to connect [%s], tried %d time(s)", err.Error(), try)
+		}
+	}
 
 	return err
 }
@@ -68,108 +123,15 @@ func (dev *Device) Connect(host string, port string) error {
 /*
  *
  */
-func (dev *Device) Disconnect() {
-	// Try disconnecting from device
-	dev.conn.Close()
-}
+func (device *Device) NewSession(user string, password string) *Session {
+	// Get new session
+	session := NewSession(device, user, password)
 
-/*
- *
- */
-func (dev *Device) ReadMessage() (byte, uint16, uint16, []byte) {
-	// Clear response buffer
-	dev.resBuf.Reset()
+	// Generate a new local session id
+	localId, _ := device.idGen.Generate()
 
-	// We read in chunks of 2 bytes (!TODO optimize)
-	tmp := make([]byte, 2)
-
-	for {
-		// Read 2 bytes
-		if _, err := dev.conn.Read(tmp); err != nil {
-			if err == io.EOF {
-				break
-			}
-		}
-
-		// Append read bytes to main buffer
-		dev.resBuf.Write(tmp)
-
-		// Read bytes until message terminator is seen
-		if bytes.Equal(tmp, msgEnd) {
-			break
-		}
-
-		// Clear read bytes for next loop iteration
-		tmp = []byte{0x00, 0x00}
-	}
-
-	// Decode message and return
-	return DecodeMessage(dev.resBuf)
-}
-
-/*
- *
- */
-func (dev *Device) Login(username string, password string) (*Session, error) {
-	// Check user for default username
-	if len(username) == 0 {
-		username = "admin"
-	}
-
-	// Check password for default password
-	if len(password) == 0 {
-		password = "tlJwpbo6"
-	}
-
-	// Build login message
-	loginData := LoginReq{
-		EncryptType: "MD5",
-		LoginType:   "Sofia-Go",
-		UserName:    username,
-		PassWord:    password,
-	}
-
-	// Marshal message to JSON
-	data, _ := json.Marshal(loginData)
-
-	// Build device message
-	EncodeMessage(dev.reqBuf, data, LOGIN_REQ2)
-
-	// Send message
-	if _, err := dev.conn.Write(dev.reqBuf.Bytes()); err != nil {
-		return nil, err
-	}
-
-	return dev.LoginResponse(), nil
-}
-
-/*
- *
- */
-func (dev *Device) LoginResponse() *Session {
-	var res LoginRes
-
-	// Read response
-	sessionId, msgId, _, data := dev.ReadMessage()
-
-	// Unmarshall data to JSON
-	if err := json.Unmarshal(data, &res); err != nil {
-		return nil
-	}
-
-	if msgId != LOGIN_RSP {
-		return nil
-	}
-
-	if res.Ret != RetOK {
-		return nil
-	}
-
-	// Lookup session
-	session, found := dev.sessions[sessionId]
-	if !found {
-		session = NewSesion(sessionId, res.SessionID)
-	}
+	// Add an entry
+	device.localSessions[localId] = session
 
 	return session
 }
@@ -177,182 +139,126 @@ func (dev *Device) LoginResponse() *Session {
 /*
  *
  */
-func (device *Device) Logout() {
+func (device *Device) DeleteSession() {
 
 }
 
-func (dev *Device) SystemInfo(s *Session) (SysInfo, error) {
-	// Clear buffer
-	dev.reqBuf.Reset()
+/*
+ *
+ */
+func (device *Device) worker() {
+	// Make a reader
+	reader := bufio.NewReader(device.transport)
 
-	data := CmdReq{
-		Name:      "SystemInfo",
-		SessionID: *s.IDStr(),
+	for {
+		// Begin reading
+		buf, err := reader.ReadBytes(0x0A)
+		if err != nil && err == io.EOF {
+			device.logger.WithFields(
+				logrus.Fields{
+					"host": device.host + ":" + device.port,
+				}).Error("Connection closed [%s]", err.Error())
+
+			break
+		}
+
+		// Decode message
+		msg := device.DecodeMessage(buf)
+
+		device.logger.WithFields(
+			logrus.Fields{
+				"host":  device.host + ":" + device.port,
+				"msgId": msg.msgId,
+			}).Debug("Received from transport")
+
+		// Find session local index
+		localSessionId, found := device.sessions[msg.sessionId]
+		if !found {
+			device.logger.WithFields(
+				logrus.Fields{
+					"host": device.host + ":" + device.port,
+				}).Info("Unexpected session ID [0x%X]", msg.sessionId)
+
+			continue
+		}
+
+		// Find local session
+		session, found := device.localSessions[localSessionId]
+		if !found {
+			device.logger.WithFields(
+				logrus.Fields{
+					"host": device.host + ":" + device.port,
+				}).Info("Local session [%s] not found for session ID [0x%X]", localSessionId, msg.sessionId)
+
+			continue
+		}
+
+		// Send message to session
+		session.workerBus <- msg
 	}
+}
 
-	// Marshal data to JSON
-	encodedData, _ := json.Marshal(data)
+/*
+ *
+ */
+func (device *Device) EncodeMessage(msg *DeviceMessage) {
+	// Always reset the Tx buffer
+	device.txBuf.Reset()
 
 	// Encode message
-	EncodeMessage(dev.reqBuf, encodedData, SYSINFO_REQ)
+	{
+		encMsgId := make([]byte, 2)
+		encDataLen := make([]byte, 4)
+		binary.LittleEndian.PutUint16(encMsgId, uint16(msg.msgId))
+		binary.LittleEndian.PutUint32(encDataLen, msg.dataLen)
 
-	// Send message
-	if _, err := dev.conn.Write(dev.reqBuf.Bytes()); err != nil {
-		return SysInfo{}, err
+		buf := device.txBuf
+		buf.WriteByte(0xFF)                             // Header flag, always 0xFF
+		buf.WriteByte(msg.version)                      // Version, usually 0
+		buf.Write([]byte{0x00, 0x00})                   // Reserved field 1,2
+		buf.WriteByte(msg.sessionId)                    // Session ID
+		buf.Write([]byte{0x00, 0x00, 0x00})             // Unknown field 1
+		buf.WriteByte(msg.seqNum)                       // Sequence number
+		buf.Write([]byte{0x00, 0x00, 0x00, 0x00, 0x00}) // Unknown field 2
+		buf.Write(encMsgId)                             // Message ID
+		buf.Write(encDataLen)                           // Data length
+		buf.Write(msg.data)                             // Data
+		buf.Write([]byte{0x0A, 0x00})                   // Message trailer, always 0x0A,0x00
 	}
-
-	return dev.SystemInfoResponse(), nil
 }
 
-func (dev *Device) SystemInfoResponse() SysInfo {
-	// Read response
-	_, msgId, _, data := dev.ReadMessage()
-
-	// Create a map
-	var res SysInfo
-
-	// Unmarshall data to JSON
-	if err := json.Unmarshal(data, &res); err != nil {
-		fmt.Printf("1 %s\n", err.Error())
-		return SysInfo{}
+/*
+ *
+ */
+func (device *Device) DecodeMessage(buf []byte) DeviceMessage {
+	// Decode message
+	var msg DeviceMessage
+	{
+		msg.version = buf[DeviceMessageOffsetVersion]                              // Version
+		msg.sessionId = buf[DeviceMessageOffsetSessionId]                          // Session ID
+		msg.seqNum = buf[DeviceMessageOffsetSeqNum]                                // Sequence number
+		msg.msgId = binary.LittleEndian.Uint16(buf[DeviceMessageOffsetMsgId:])     // Message ID
+		msg.dataLen = binary.LittleEndian.Uint32(buf[DeviceMessageOffsetDataLen:]) // Data length
+		msg.data = buf[20 : len(buf)-DeviceMessageTrailerLen]                      // Truncate the message trailer
 	}
 
-	if msgId != SYSINFO_RSP {
-		fmt.Printf("2 %d\n", msgId)
-		return SysInfo{}
-	}
-
-	return res
+	return msg
 }
 
-func (dev *Device) SystemAbility(s *Session) (SysAbility, error) {
-	// Clear buffer
-	dev.reqBuf.Reset()
-
-	data := CmdReq{
-		Name:      "SystemFunction",
-		SessionID: *s.IDStr(),
-	}
-
-	// Marshal data to JSON
-	encodedData, _ := json.Marshal(data)
-
+/*
+ *
+ */
+func (device *Device) SendMessage(msg *DeviceMessage) error {
 	// Encode message
-	EncodeMessage(dev.reqBuf, encodedData, ABILITY_GET)
+	device.EncodeMessage(msg)
 
 	// Send message
-	if _, err := dev.conn.Write(dev.reqBuf.Bytes()); err != nil {
-		return SysAbility{}, err
-	}
+	writeLen, err := device.transport.Write(device.txBuf.Bytes())
 
-	return dev.SystemAbilityResponse(), nil
-}
+	device.logger.WithFields(
+		logrus.Fields{
+			"host": device.host + ":" + device.port,
+		}).Debug("Wrote [%d] bytes to transport", writeLen)
 
-func (dev *Device) SystemAbilityResponse() SysAbility {
-	// Read response
-	_, msgId, _, data := dev.ReadMessage()
-
-	// Create a map
-	var res SysAbility
-
-	// Unmarshall data to JSON
-	if err := json.Unmarshal(data, &res); err != nil {
-		fmt.Printf("1 %s\n", err.Error())
-		return SysAbility{}
-	}
-
-	if msgId != ABILITY_GET_RSP {
-		fmt.Printf("2 %d\n", msgId)
-		return SysAbility{}
-	}
-
-	return res
-}
-
-func (dev *Device) SystemOEMInfo(s *Session) (SysOEMInfo, error) {
-	// Clear buffer
-	dev.reqBuf.Reset()
-
-	data := CmdReq{
-		Name:      "OEMInfo",
-		SessionID: *s.IDStr(),
-	}
-
-	// Marshal data to JSON
-	encodedData, _ := json.Marshal(data)
-
-	// Encode message
-	EncodeMessage(dev.reqBuf, encodedData, SYSINFO_REQ)
-
-	// Send message
-	if _, err := dev.conn.Write(dev.reqBuf.Bytes()); err != nil {
-		return SysOEMInfo{}, err
-	}
-
-	return dev.SystemOEMInfoResponse(), nil
-}
-
-func (dev *Device) SystemOEMInfoResponse() SysOEMInfo {
-	// Read response
-	_, msgId, _, data := dev.ReadMessage()
-
-	// Create a map
-	var res SysOEMInfo
-
-	// Unmarshall data to JSON
-	if err := json.Unmarshal(data, &res); err != nil {
-		fmt.Printf("1 %s\n", err.Error())
-		return SysOEMInfo{}
-	}
-
-	if msgId != SYSINFO_RSP {
-		fmt.Printf("2 %d\n", msgId)
-		return SysOEMInfo{}
-	}
-
-	return res
-}
-
-func (dev *Device) SystemConfig(s *Session, what string) (SysConfig, error) {
-	// Clear buffer
-	dev.reqBuf.Reset()
-
-	data := CmdReq{
-		Name:      what,
-		SessionID: *s.IDStr(),
-	}
-
-	// Marshal data to JSON
-	encodedData, _ := json.Marshal(data)
-
-	// Encode message
-	EncodeMessage(dev.reqBuf, encodedData, CONFIG_GET)
-
-	// Send message
-	if _, err := dev.conn.Write(dev.reqBuf.Bytes()); err != nil {
-		return SysConfig{}, err
-	}
-
-	return dev.SystemConfigResponse(), nil
-}
-
-func (dev *Device) SystemConfigResponse() SysConfig {
-	// Read response
-	_, msgId, _, data := dev.ReadMessage()
-
-	// Create a map
-	var res SysConfig
-
-	// Unmarshall data to JSON
-	if err := json.Unmarshal(data, &res); err != nil {
-		fmt.Printf("1 %s\n", err.Error())
-		return SysConfig{}
-	}
-
-	if msgId != CONFIG_GET_RSP {
-		fmt.Printf("2 %d\n", msgId)
-		return SysConfig{}
-	}
-
-	return res
+	return err
 }
