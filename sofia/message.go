@@ -2,11 +2,13 @@ package sofia
 
 // Message types
 const (
-	LOGIN_REQ1 = 999
-	LOGIN_REQ2 = 1000
-	LOGIN_RSP  = 1001
-	LOGOUT_REQ = 1001
-	LOGOUT_RSP = 1002
+	LOGIN_REQ1  = 999
+	LOGIN_REQ2  = 1000
+	LOGIN_RSP   = 1001
+	LOGOUT_REQ  = 1001
+	LOGOUT_RSP  = 1002
+	SYSINFO_REQ = 1020
+	SYSINFO_RSP = 1021
 )
 
 // Message format particulars
@@ -15,7 +17,8 @@ const (
 	DeviceMessageTrailerLen      = 2
 	DeviceMessageOffsetVersion   = 1
 	DeviceMessageOffsetSessionId = 4
-	DeviceMessageOffsetSeqNum    = 9
+	DeviceMessageOffsetSeqNum    = 8
+	DeviceMessageOffsetOpaqueId  = 9
 	DeviceMessageOffsetMsgId     = 14
 	DeviceMessageOffsetDataLen   = 15
 )
@@ -23,6 +26,7 @@ const (
 // Message for internal consumption (!wire format)
 type DeviceMessage struct {
 	msgId     uint16 // Message ID
+	opaqueId  uint8  // Opaque ID (meant to be sent back by device)
 	version   byte   // Version
 	sessionId byte   // Session ID
 	seqNum    byte   // Sequence number
@@ -47,3 +51,19 @@ type LoginResData struct {
 	Ret           uint32 `json:"Ret"`
 	SessionID     string `json:"SessionID"`
 }
+
+// Generic request data
+type CmdReqData struct {
+	Name      string // Command name
+	SessionID string // Session ID
+}
+
+// Generic response data
+type CmdResData struct {
+	Name      string `json: "Name"`      // Command name
+	Ret       uint32 `json: "Ret"`       // Return code
+	SessionID string `json: "SessionID"` // Session ID
+}
+
+type KeepAliveReqData CmdReqData
+type KeepAliveResData CmdResData

@@ -1,23 +1,31 @@
 package main
 
 import (
-	"fmt"
 	"sofia-go/sofia"
 )
 
 func main() {
 	// Create a new device
-	device := sofia.NewDevice("192.168.31.177", "34567", 5, 5)
+	device1 := sofia.NewDevice("192.168.31.177", "34567", 5, 5)
 
-	device.Connect()
+	device1.Connect()
 
-	session := device.NewSession("admin", "")
+	session1 := device1.NewSession("admin", "")
 
-	session.Login()
+	session1.Login()
 
-	status := <-*device.WorkerChan()
+	session1.SysInfo()
 
-	fmt.Printf("Before exiting, %d\n", status)
+	// Create another device
+	device2 := sofia.NewDevice("192.168.31.156", "34567", 5, 5)
+
+	device2.Connect()
+
+	session2 := device2.NewSession("admin", "")
+
+	session2.Login()
+
+	session2.SysInfo()
 }
 
 /*

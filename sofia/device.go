@@ -10,25 +10,24 @@ import (
 	"time"
 
 	"github.com/sirupsen/logrus"
-	"github.com/teris-io/shortid"
 )
 
 /*
  *
  */
 type Device struct {
-	logger         *logrus.Logger      // Device scoped logger
-	rxBuf          *bytes.Buffer       // Receive buffer
-	txBuf          *bytes.Buffer       // Transmit buffer
-	host           string              // Host, IP address or hostname
-	port           string              // Port
-	connectTimeout time.Duration       // Connect timeout
-	connectRetries uint8               // Connect retries
-	transport      net.Conn            // Transport connection
-	idGen          *shortid.Shortid    // ID generator
-	sessions       map[byte]string     // Mapping session IDs
-	localSessions  map[string]*Session // Sessions
-	workerChan     chan error          // Device worker channel
+	logger         *logrus.Entry // Device scoped logger
+	rxBuf          *bytes.Buffer // Receive buffer
+	txBuf          *bytes.Buffer // Transmit buffer
+	host           string        // Host, IP address or hostname
+	port           string        // Port
+	connectTimeout time.Duration // Connect timeout
+	connectRetries uint8         // Connect retries
+	transport      net.Conn      // Transport connection
+	sequence       *Sequence     // Sequence of indices
+	sessions       []*Session    // Actual sessions
+	tmpSessions    []*Session    // Temporary sessions (discarded after LOGIN_RSP)
+	workerChan     chan error    // Device worker channel
 }
 
 /*
@@ -45,15 +44,6 @@ func NewDevice(host string, port string, timeout uint16, retries uint8) *Device 
 	// Allocate a new device
 	var device *Device = new(Device)
 
-	// Initialize and setup device logger
-	{
-		newLogger := logrus.New()
-		newLogger.SetFormatter(&logrus.JSONFormatter{})
-		newLogger.SetOutput(os.Stdout)
-		newLogger.SetLevel(logrus.DebugLevel)
-		device.logger = newLogger
-	}
-
 	// Allocate Rx and Tx buffers
 	{
 		device.rxBuf = new(bytes.Buffer)
@@ -68,11 +58,20 @@ func NewDevice(host string, port string, timeout uint16, retries uint8) *Device 
 		device.connectRetries = retries
 	}
 
+	// Initialize and setup device logger
+	{
+		newLogger := logrus.New()
+		newLogger.SetFormatter(&logrus.JSONFormatter{})
+		newLogger.SetOutput(os.Stdout)
+		newLogger.SetLevel(logrus.DebugLevel)
+		device.logger = newLogger.WithFields(logrus.Fields{"remote": device.host + ":" + device.port})
+	}
+
 	// Initialize sessions
 	{
-		device.idGen = shortid.GetDefault()
-		device.sessions = make(map[byte]string, 16)
-		device.localSessions = make(map[string]*Session, 16)
+		device.sequence = NewSequence(0xFF)
+		device.sessions = make([]*Session, 0xFF)
+		device.tmpSessions = make([]*Session, 0xFF)
 	}
 
 	// Setup worker channel
@@ -99,10 +98,7 @@ func (device *Device) Connect() error {
 	{
 		for try := 1; try <= int(device.connectRetries); try++ {
 			if device.transport, err = net.DialTimeout("tcp", device.host+":"+device.port, device.connectTimeout); err == nil {
-				device.logger.WithFields(
-					logrus.Fields{
-						"host": device.host + ":" + device.port,
-					}).Debug("Connected successfully in %d tries", try)
+				device.logger.Debug("Connected successfully in try ", try)
 
 				// Start worker
 				go device.worker()
@@ -110,10 +106,7 @@ func (device *Device) Connect() error {
 				break
 			}
 
-			device.logger.WithFields(
-				logrus.Fields{
-					"host": device.host + ":" + device.port,
-				}).Debug("Unable to connect [%s], tried %d time(s)", err.Error(), try)
+			device.logger.Debug("Unable to connect, try ", err.Error(), try)
 		}
 	}
 
@@ -124,14 +117,19 @@ func (device *Device) Connect() error {
  *
  */
 func (device *Device) NewSession(user string, password string) *Session {
-	// Get new session
-	session := NewSession(device, user, password)
-
 	// Generate a new local session id
-	localId, _ := device.idGen.Generate()
+	localId := device.sequence.GetIndex()
+	if localId == 0 {
+		return nil
+	}
+
+	// Get new session
+	session := NewSession(device, localId, user, password)
+
+	device.logger.Info("Created new session with local ID ", localId)
 
 	// Add an entry
-	device.localSessions[localId] = session
+	device.tmpSessions[localId] = session
 
 	return session
 }
@@ -154,43 +152,43 @@ func (device *Device) worker() {
 		// Begin reading
 		buf, err := reader.ReadBytes(0x0A)
 		if err != nil && err == io.EOF {
-			device.logger.WithFields(
-				logrus.Fields{
-					"host": device.host + ":" + device.port,
-				}).Error("Connection closed [%s]", err.Error())
-
+			device.logger.Error("Connection closed [%s]", err.Error())
+			//device.workerChan <- err
 			break
 		}
 
 		// Decode message
 		msg := device.DecodeMessage(buf)
 
-		device.logger.WithFields(
-			logrus.Fields{
-				"host":  device.host + ":" + device.port,
-				"msgId": msg.msgId,
-			}).Debug("Received from transport")
+		device.logger.Debug("Read ", len(buf), " bytes from transport")
 
-		// Find session local index
-		localSessionId, found := device.sessions[msg.sessionId]
-		if !found {
-			device.logger.WithFields(
-				logrus.Fields{
-					"host": device.host + ":" + device.port,
-				}).Info("Unexpected session ID [0x%X]", msg.sessionId)
+		// All messages for device require a valid session ID that we receive
+		// in LOGIN_RSP. Since we create a temporary session even before we have
+		// this session ID, we require it to be mapped to our internal ID.
 
-			continue
-		}
+		var session *Session
+		{
+			if msg.msgId == LOGIN_RSP {
+				// Find session using the internal id
+				if session = device.tmpSessions[msg.opaqueId]; session == nil {
+					device.logger.Info("Unexpected local session ID ", msg.opaqueId)
+					continue
+				}
 
-		// Find local session
-		session, found := device.localSessions[localSessionId]
-		if !found {
-			device.logger.WithFields(
-				logrus.Fields{
-					"host": device.host + ":" + device.port,
-				}).Info("Local session [%s] not found for session ID [0x%X]", localSessionId, msg.sessionId)
-
-			continue
+				// Update actual session ID, session and release temporary session
+				{
+					session.id = msg.sessionId
+					device.sessions[session.id] = session
+					device.tmpSessions[msg.opaqueId] = nil
+					device.sequence.FreeIndex(msg.opaqueId)
+				}
+			} else {
+				// Find session using device session id
+				if session = device.sessions[msg.sessionId]; session == nil {
+					device.logger.Info("Unexpected device session ID ", msg.sessionId)
+					continue
+				}
+			}
 		}
 
 		// Send message to session
@@ -213,17 +211,25 @@ func (device *Device) EncodeMessage(msg *DeviceMessage) {
 		binary.LittleEndian.PutUint32(encDataLen, msg.dataLen)
 
 		buf := device.txBuf
-		buf.WriteByte(0xFF)                             // Header flag, always 0xFF
-		buf.WriteByte(msg.version)                      // Version, usually 0
-		buf.Write([]byte{0x00, 0x00})                   // Reserved field 1,2
-		buf.WriteByte(msg.sessionId)                    // Session ID
-		buf.Write([]byte{0x00, 0x00, 0x00})             // Unknown field 1
-		buf.WriteByte(msg.seqNum)                       // Sequence number
-		buf.Write([]byte{0x00, 0x00, 0x00, 0x00, 0x00}) // Unknown field 2
-		buf.Write(encMsgId)                             // Message ID
-		buf.Write(encDataLen)                           // Data length
-		buf.Write(msg.data)                             // Data
-		buf.Write([]byte{0x0A, 0x00})                   // Message trailer, always 0x0A,0x00
+		buf.WriteByte(0xFF)                 // Header flag, always 0xFF
+		buf.WriteByte(msg.version)          // Version, usually 0
+		buf.Write([]byte{0x00, 0x00})       // Reserved field 1,2
+		buf.WriteByte(msg.sessionId)        // Session ID
+		buf.Write([]byte{0x00, 0x00, 0x00}) // Unknown field 1
+		buf.WriteByte(msg.seqNum)           // Sequence number
+
+		// Use 2 bytes of Unknown field 2 to correlate local session with login
+		if msg.msgId == LOGIN_REQ2 {
+			buf.WriteByte(msg.opaqueId) // Unknown field 2 (first byte)
+		} else {
+			buf.Write([]byte{0x00}) // Unknown field 2 (first byte)
+		}
+
+		buf.Write([]byte{0x00, 0x00, 0x00, 0x00}) // Unknown field 2 (last 4 bytes)
+		buf.Write(encMsgId)                       // Message ID
+		buf.Write(encDataLen)                     // Data length
+		buf.Write(msg.data)                       // Data
+		buf.Write([]byte{0x0A, 0x00})             // Message trailer, always 0x0A,0x00
 	}
 }
 
@@ -240,6 +246,11 @@ func (device *Device) DecodeMessage(buf []byte) DeviceMessage {
 		msg.msgId = binary.LittleEndian.Uint16(buf[DeviceMessageOffsetMsgId:])     // Message ID
 		msg.dataLen = binary.LittleEndian.Uint32(buf[DeviceMessageOffsetDataLen:]) // Data length
 		msg.data = buf[20 : len(buf)-DeviceMessageTrailerLen]                      // Truncate the message trailer
+
+		// Extract login correlation id
+		if msg.msgId == LOGIN_RSP {
+			msg.opaqueId = buf[DeviceMessageOffsetOpaqueId] // Opaque ID
+		}
 	}
 
 	return msg
@@ -255,10 +266,7 @@ func (device *Device) SendMessage(msg *DeviceMessage) error {
 	// Send message
 	writeLen, err := device.transport.Write(device.txBuf.Bytes())
 
-	device.logger.WithFields(
-		logrus.Fields{
-			"host": device.host + ":" + device.port,
-		}).Debug("Wrote [%d] bytes to transport", writeLen)
+	device.logger.Debug("Wrote ", writeLen, " bytes to transport")
 
 	return err
 }
