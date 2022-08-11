@@ -1,0 +1,1 @@
+![Build Status](https://github.com/onexay/sofia-go/.github/workflows/go.yml/badge.svg)
