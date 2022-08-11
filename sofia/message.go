@@ -9,11 +9,13 @@ const (
 	LOGOUT_RSP  = 1002
 	SYSINFO_REQ = 1020
 	SYSINFO_RSP = 1021
+	ABILITY_REQ = 1360
+	ABILITY_RSP = 1361
 )
 
 // Message format particulars
 const (
-	DeviceMessageHdeaderLen      = 18
+	DeviceMessageHeaderLen       = 18
 	DeviceMessageTrailerLen      = 2
 	DeviceMessageOffsetVersion   = 1
 	DeviceMessageOffsetSessionId = 4
@@ -21,6 +23,7 @@ const (
 	DeviceMessageOffsetOpaqueId  = 9
 	DeviceMessageOffsetMsgId     = 14
 	DeviceMessageOffsetDataLen   = 15
+	DeviceMessageOffsetData      = 20
 )
 
 // Message for internal consumption (!wire format)

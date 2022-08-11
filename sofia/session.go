@@ -9,13 +9,13 @@ import (
  *
  */
 type Session struct {
-	id        byte               // Session id as received from device
-	idStr     string             // Session id as string
-	opaqueId  uint8              // Opaque id (used as a correlation id)
-	user      string             // Username
-	password  string             // Password
-	workerBus chan DeviceMessage // Message bus for device worker
-	device    *Device            // Device instance
+	id       byte               // Session id as received from device
+	idStr    string             // Session id as string
+	opaqueId uint8              // Opaque id (used as a correlation id)
+	user     string             // Username
+	password string             // Password
+	rxChan   chan DeviceMessage // Channel for receiving messages
+	device   *Device            // Device instance
 }
 
 /*
@@ -44,7 +44,7 @@ func NewSession(device *Device, localId uint8, user string, password string) *Se
 
 	// Initialize worker message bus
 	{
-		session.workerBus = make(chan DeviceMessage, 100)
+		session.rxChan = make(chan DeviceMessage)
 	}
 
 	// Save device context
@@ -59,7 +59,8 @@ func NewSession(device *Device, localId uint8, user string, password string) *Se
  *
  */
 func DeleteSession(session *Session) {
-
+	// Close channel
+	close(session.rxChan)
 }
 
 // Login to device
@@ -90,14 +91,17 @@ func (session *Session) Login() error {
 	session.device.SendMessage(&msg)
 
 	// Receive message from device
-	resMsg := <-session.workerBus
+	resMsg := <-session.rxChan
 
 	// Unmarshall response data
 	var resData LoginResData
-	json.Unmarshal(resMsg.data, &resData)
+	if err := json.Unmarshal(resMsg.data, &resData); err != nil {
+		fmt.Printf("Unable to parse response for session 0x%X, message %d [%s]\n", resMsg.sessionId, resMsg.msgId, err.Error())
+		return err
+	}
 
-	// Save params
 	session.idStr = resData.SessionID
+	fmt.Printf("Login success for session %s\n", resData.SessionID)
 
 	return nil
 }
@@ -106,7 +110,7 @@ func (session *Session) Login() error {
 func (session *Session) SysInfo() error {
 	// Data for sysinfo
 	data := CmdReqData{
-		Name:      "SysInfo",
+		Name:      "SystemInfo",
 		SessionID: session.idStr,
 	}
 
@@ -128,9 +132,42 @@ func (session *Session) SysInfo() error {
 	session.device.SendMessage(&msg)
 
 	// Receive message from device
-	resMsg := <-session.workerBus
+	resMsg := <-session.rxChan
 
-	fmt.Printf("SysInfo %d bytes\n", resMsg.dataLen)
+	fmt.Printf("[%s] SysInfo %d bytes\n", session.idStr, resMsg.dataLen)
+
+	return nil
+}
+
+// System Abilities
+func (session *Session) SysAbilities() error {
+	// Data for sysinfo
+	data := CmdReqData{
+		Name:      "SystemFunction",
+		SessionID: session.idStr,
+	}
+
+	// Marshall data as JSON
+	mdata, _ := json.Marshal(data)
+
+	// Build message
+	msg := DeviceMessage{
+		msgId:     ABILITY_REQ,
+		opaqueId:  0,
+		version:   0,
+		sessionId: session.id,
+		seqNum:    0,
+		dataLen:   uint32(len(mdata)),
+		data:      mdata,
+	}
+
+	// Send message to device
+	session.device.SendMessage(&msg)
+
+	// Receive message from device
+	resMsg := <-session.rxChan
+
+	fmt.Printf("[%s] System Abilities %d bytes\n", session.idStr, resMsg.dataLen)
 
 	return nil
 }

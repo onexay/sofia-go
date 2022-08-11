@@ -1,31 +1,49 @@
 package main
 
 import (
+	"fmt"
 	"sofia-go/sofia"
+	"sync"
 )
 
 func main() {
-	// Create a new device
-	device1 := sofia.NewDevice("192.168.31.177", "34567", 5, 5)
+	wg := sync.WaitGroup{}
 
-	device1.Connect()
+	go func(pwg *sync.WaitGroup) {
+		fmt.Printf("Starting task 1 ...\n")
+		pwg.Add(1)
 
-	session1 := device1.NewSession("admin", "")
+		// Create a new device
+		device1 := sofia.NewDevice("192.168.31.177", "34567", 5, 5)
+		device1.Connect()
+		session1 := device1.NewSession("admin", "")
+		session1.Login()
+		session1.SysInfo()
+		session1.SysAbilities()
+		<-*device1.WorkerChan()
 
-	session1.Login()
+		pwg.Done()
+	}(&wg)
 
-	session1.SysInfo()
+	go func(pwg *sync.WaitGroup) {
+		fmt.Printf("Starting task 2 ...\n")
+		pwg.Add(1)
 
-	// Create another device
-	device2 := sofia.NewDevice("192.168.31.156", "34567", 5, 5)
+		// Create another device
+		device2 := sofia.NewDevice("192.168.31.156", "34567", 5, 5)
+		device2.Connect()
+		session2 := device2.NewSession("admin", "")
+		session2.Login()
+		session2.SysInfo()
+		session2.SysAbilities()
+		<-*device2.WorkerChan()
 
-	device2.Connect()
+		pwg.Done()
+	}(&wg)
 
-	session2 := device2.NewSession("admin", "")
-
-	session2.Login()
-
-	session2.SysInfo()
+	fmt.Printf("Waiting for other tasks to complete...")
+	wg.Wait()
+	fmt.Scanln()
 }
 
 /*

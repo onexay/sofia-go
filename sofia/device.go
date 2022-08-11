@@ -7,6 +7,7 @@ import (
 	"io"
 	"net"
 	"os"
+	"sync"
 	"time"
 
 	"github.com/sirupsen/logrus"
@@ -16,25 +17,26 @@ import (
  *
  */
 type Device struct {
-	logger         *logrus.Entry // Device scoped logger
-	rxBuf          *bytes.Buffer // Receive buffer
-	txBuf          *bytes.Buffer // Transmit buffer
-	host           string        // Host, IP address or hostname
-	port           string        // Port
-	connectTimeout time.Duration // Connect timeout
-	connectRetries uint8         // Connect retries
-	transport      net.Conn      // Transport connection
-	sequence       *Sequence     // Sequence of indices
-	sessions       []*Session    // Actual sessions
-	tmpSessions    []*Session    // Temporary sessions (discarded after LOGIN_RSP)
-	workerChan     chan error    // Device worker channel
+	logger         *logrus.Entry   // Device scoped logger
+	rxBuf          *bytes.Buffer   // Receive buffer
+	txBuf          *bytes.Buffer   // Transmit buffer
+	host           string          // Host, IP address or hostname
+	port           string          // Port
+	connectTimeout time.Duration   // Connect timeout
+	connectRetries uint8           // Connect retries
+	transport      net.Conn        // Transport connection
+	sequence       *Sequence       // Sequence of indices
+	sessions       []*Session      // Actual sessions
+	tmpSessions    []*Session      // Temporary sessions (discarded after LOGIN_RSP)
+	wg             *sync.WaitGroup // Wait groups for sessions
+	rxChan         chan error      // Device receive channel
 }
 
 /*
  *
  */
 func (device *Device) WorkerChan() *chan error {
-	return &device.workerChan
+	return &device.rxChan
 }
 
 /*
@@ -61,7 +63,7 @@ func NewDevice(host string, port string, timeout uint16, retries uint8) *Device 
 	// Initialize and setup device logger
 	{
 		newLogger := logrus.New()
-		newLogger.SetFormatter(&logrus.JSONFormatter{})
+		newLogger.SetFormatter(&logrus.TextFormatter{})
 		newLogger.SetOutput(os.Stdout)
 		newLogger.SetLevel(logrus.DebugLevel)
 		device.logger = newLogger.WithFields(logrus.Fields{"remote": device.host + ":" + device.port})
@@ -76,7 +78,8 @@ func NewDevice(host string, port string, timeout uint16, retries uint8) *Device 
 
 	// Setup worker channel
 	{
-		device.workerChan = make(chan error)
+		device.wg = new(sync.WaitGroup)
+		device.rxChan = make(chan error)
 	}
 
 	return device
@@ -152,10 +155,13 @@ func (device *Device) worker() {
 		// Begin reading
 		buf, err := reader.ReadBytes(0x0A)
 		if err != nil && err == io.EOF {
-			device.logger.Error("Connection closed [%s]", err.Error())
+			device.logger.Error("Connection closed ", err.Error())
 			//device.workerChan <- err
 			break
 		}
+
+		// Read and discard additional terminator byte [hack??]
+		reader.ReadByte()
 
 		// Decode message
 		msg := device.DecodeMessage(buf)
@@ -192,7 +198,7 @@ func (device *Device) worker() {
 		}
 
 		// Send message to session
-		session.workerBus <- msg
+		session.rxChan <- msg
 	}
 }
 
@@ -245,7 +251,7 @@ func (device *Device) DecodeMessage(buf []byte) DeviceMessage {
 		msg.seqNum = buf[DeviceMessageOffsetSeqNum]                                // Sequence number
 		msg.msgId = binary.LittleEndian.Uint16(buf[DeviceMessageOffsetMsgId:])     // Message ID
 		msg.dataLen = binary.LittleEndian.Uint32(buf[DeviceMessageOffsetDataLen:]) // Data length
-		msg.data = buf[20 : len(buf)-DeviceMessageTrailerLen]                      // Truncate the message trailer
+		msg.data = buf[DeviceMessageOffsetData:]                                   // Truncate the message trailer
 
 		// Extract login correlation id
 		if msg.msgId == LOGIN_RSP {
