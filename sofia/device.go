@@ -1,7 +1,6 @@
 package sofia
 
 import (
-	"bufio"
 	"bytes"
 	"encoding/binary"
 	"io"
@@ -18,7 +17,6 @@ import (
  */
 type Device struct {
 	logger         *logrus.Entry   // Device scoped logger
-	rxBuf          *bytes.Buffer   // Receive buffer
 	txBuf          *bytes.Buffer   // Transmit buffer
 	host           string          // Host, IP address or hostname
 	port           string          // Port
@@ -46,9 +44,8 @@ func NewDevice(host string, port string, timeout uint16, retries uint8) *Device 
 	// Allocate a new device
 	var device *Device = new(Device)
 
-	// Allocate Rx and Tx buffers
+	// Allocate Tx buffers
 	{
-		device.rxBuf = new(bytes.Buffer)
 		device.txBuf = new(bytes.Buffer)
 	}
 
@@ -148,25 +145,37 @@ func (device *Device) DeleteSession() {
  *
  */
 func (device *Device) worker() {
-	// Make a reader
-	reader := bufio.NewReader(device.transport)
-
 	for {
-		// Begin reading
-		buf, err := reader.ReadBytes(0x0A)
-		if err != nil && err == io.EOF {
-			device.logger.Error("Connection closed ", err.Error())
-			//device.workerChan <- err
+		// Read message header
+		hbuf := make([]byte, DeviceMessageHeaderLen)
+		hrlen, err := io.ReadFull(device.transport, hbuf)
+		if err != nil {
+			device.logger.Error("Connection closed [reading header] ", err.Error())
 			break
 		}
 
-		// Read and discard additional terminator byte [hack??]
-		reader.ReadByte()
+		// Decode message header
+		hdr := device.DecodeMessageHeader(hbuf)
 
-		// Decode message
-		msg := device.DecodeMessage(buf)
+		// Read rest of message
+		dbuf := make([]byte, hdr.dataLen)
+		drlen, err := io.ReadFull(device.transport, dbuf)
+		if err != nil {
+			device.logger.Error("Connection closed [reading data] ", err.Error())
+			break
+		}
 
-		device.logger.Debug("Read ", len(buf), " bytes from transport")
+		device.logger.Debug("Rx message [", hdr.msgId, "], length [", hrlen+drlen, "]")
+
+		msg := DeviceMessage{
+			msgId:     hdr.msgId,
+			opaqueId:  hdr.opaqueId,
+			version:   hdr.version,
+			sessionId: hdr.sessionId,
+			seqNum:    hdr.seqNum,
+			dataLen:   hdr.dataLen,
+			data:      dbuf[:hdr.dataLen-DeviceMessageTrailerLen],
+		}
 
 		// All messages for device require a valid session ID that we receive
 		// in LOGIN_RSP. Since we create a temporary session even before we have
@@ -196,6 +205,9 @@ func (device *Device) worker() {
 				}
 			}
 		}
+
+		// Increment sequence number
+		session.seqNum = session.seqNum + 1
 
 		// Send message to session
 		session.rxChan <- msg
@@ -242,6 +254,28 @@ func (device *Device) EncodeMessage(msg *DeviceMessage) {
 /*
  *
  */
+func (device *Device) DecodeMessageHeader(buf []byte) DeviceMessageHeader {
+	// Decode message
+	var hdr DeviceMessageHeader
+	{
+		hdr.version = buf[DeviceMessageOffsetVersion]                              // Version
+		hdr.sessionId = buf[DeviceMessageOffsetSessionId]                          // Session ID
+		hdr.seqNum = buf[DeviceMessageOffsetSeqNum]                                // Sequence number
+		hdr.msgId = binary.LittleEndian.Uint16(buf[DeviceMessageOffsetMsgId:])     // Message ID
+		hdr.dataLen = binary.LittleEndian.Uint32(buf[DeviceMessageOffsetDataLen:]) // Data length
+
+		// Extract login correlation id
+		if hdr.msgId == LOGIN_RSP {
+			hdr.opaqueId = buf[DeviceMessageOffsetOpaqueId] // Opaque ID
+		}
+	}
+
+	return hdr
+}
+
+/*
+ *
+ */
 func (device *Device) DecodeMessage(buf []byte) DeviceMessage {
 	// Decode message
 	var msg DeviceMessage
@@ -272,7 +306,7 @@ func (device *Device) SendMessage(msg *DeviceMessage) error {
 	// Send message
 	writeLen, err := device.transport.Write(device.txBuf.Bytes())
 
-	device.logger.Debug("Wrote ", writeLen, " bytes to transport")
+	device.logger.Debug("Tx message [", msg.msgId, "], length [", writeLen, "]")
 
 	return err
 }

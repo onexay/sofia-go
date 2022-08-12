@@ -2,29 +2,61 @@ package sofia
 
 // Message types
 const (
-	LOGIN_REQ1  = 999
-	LOGIN_REQ2  = 1000
-	LOGIN_RSP   = 1001
-	LOGOUT_REQ  = 1001
-	LOGOUT_RSP  = 1002
-	SYSINFO_REQ = 1020
-	SYSINFO_RSP = 1021
-	ABILITY_REQ = 1360
-	ABILITY_RSP = 1361
+	LOGIN_REQ1    = 999
+	LOGIN_REQ2    = 1000
+	LOGIN_RSP     = 1001
+	LOGOUT_REQ    = 1001
+	LOGOUT_RSP    = 1002
+	SYSINFO_REQ   = 1020
+	SYSINFO_RSP   = 1021
+	ABILITY_REQ   = 1360
+	ABILITY_RSP   = 1361
+	KEEPALIVE_REQ = 1006 // 1005 on some devices
+	KEEPALIVE_RSP = 1007 // 1006 on some devices
 )
+
+/*
+	<-1----------------->|<-2-------------->|...
+     0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9
+	+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+...+-+-+
+	|A|B| C |D|  E  |F|    G    | H |   I   | J | K |
+	+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+...+-+-+
+	 | |  |  |   |   |     |      |     |     |   |
+	 | |  |  |   |   |     |      |     |     |   +--> Trailer      2B
+	 | |  |  |   |	 |	   |      |     |     +--> Data
+	 | |  |  |   |   | 	   |      |     +--> Data Length, 4B
+	 | |  |  |   |   |     |      +--> Message ID, 2B
+	 | |  |  |   |   |     +--> Unknown, 5B
+	 | |  |  |   |   +--> Sequence Number, 1B
+	 | |  |  |   +--> Unknown, 3B
+	 | |  |  +--> Session ID, 1B
+	 | |  +--> Reserved, 2B
+	 | +--> Version, 1B
+	 +--> Header flag, 1B, always 0xFF
+*/
 
 // Message format particulars
 const (
-	DeviceMessageHeaderLen       = 18
+	DeviceMessageHeaderLen       = 20
 	DeviceMessageTrailerLen      = 2
 	DeviceMessageOffsetVersion   = 1
 	DeviceMessageOffsetSessionId = 4
 	DeviceMessageOffsetSeqNum    = 8
 	DeviceMessageOffsetOpaqueId  = 9
 	DeviceMessageOffsetMsgId     = 14
-	DeviceMessageOffsetDataLen   = 15
+	DeviceMessageOffsetDataLen   = 16
 	DeviceMessageOffsetData      = 20
 )
+
+// Message header for internal consumption (!wire format)
+type DeviceMessageHeader struct {
+	msgId     uint16 // Message ID
+	opaqueId  uint8  // Opaque ID (meant to be sent back by device)
+	version   byte   // Version
+	sessionId byte   // Session ID
+	seqNum    byte   // Sequence number
+	dataLen   uint32 // Payload length
+}
 
 // Message for internal consumption (!wire format)
 type DeviceMessage struct {
