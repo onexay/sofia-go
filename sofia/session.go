@@ -191,6 +191,10 @@ func (session *Session) SysInfo() error {
 
 	fmt.Printf("[%s] SysInfo %d bytes\n", session.idStr, resMsg.dataLen)
 
+	var x map[string]interface{}
+	json.Unmarshal(resMsg.data, &x)
+	dumpJSON(data.Name, x, "")
+
 	return nil
 }
 
@@ -215,6 +219,39 @@ func (session *Session) SysAbilities() error {
 	resMsg := <-session.rxChan
 
 	fmt.Printf("[%s] System Abilities %d bytes\n", session.idStr, resMsg.dataLen)
+
+	var x map[string]interface{}
+	json.Unmarshal(resMsg.data, &x)
+	dumpJSON(data.Name, x, "")
+
+	return nil
+}
+
+// System OEM info
+func (session *Session) SysOEMInfo() error {
+	// Data for sysinfo
+	data := CmdReqData{
+		Name:      "OEMInfo",
+		SessionID: session.idStr,
+	}
+
+	// Marshall data as JSON
+	mdata, _ := json.Marshal(data)
+
+	// Build message
+	msg := session.BuildMessage(SYSINFO_REQ, mdata)
+
+	// Send message to device
+	session.device.SendMessage(&msg)
+
+	// Receive message from device
+	resMsg := <-session.rxChan
+
+	fmt.Printf("[%s] System OEM info %d bytes\n", session.idStr, resMsg.dataLen)
+
+	var x map[string]interface{}
+	json.Unmarshal(resMsg.data, &x)
+	dumpJSON(data.Name, x, "")
 
 	return nil
 }

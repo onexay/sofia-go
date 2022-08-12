@@ -32,6 +32,7 @@ func main() {
 				if err := session.Login(); err == nil {
 					session.SysInfo()
 					session.SysAbilities()
+					session.SysOEMInfo()
 				}
 			}
 			<-*device.WorkerChan()
@@ -50,6 +51,7 @@ func main() {
 				if err := session.Login(); err == nil {
 					session.SysInfo()
 					session.SysAbilities()
+					session.SysOEMInfo()
 				}
 			}
 			<-*device.WorkerChan()
