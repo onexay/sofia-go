@@ -9,19 +9,33 @@ import (
 func main() {
 	wg := sync.WaitGroup{}
 
+	go func() {
+		fmt.Printf("Starting discovery task ...\n")
+
+		// Create a new discovery context
+		if discovery, err := sofia.NewDiscovery(34569); err == nil {
+			// Begin discovery
+			discovery.Start()
+		}
+
+		fmt.Printf("Exiting discovery task ...\n")
+	}()
+
 	go func(pwg *sync.WaitGroup) {
 		fmt.Printf("Starting task 1 ...\n")
 		pwg.Add(1)
 
 		// Create a new device
-		device1 := sofia.NewDevice("192.168.31.177", "34567", 5, 5)
-		device1.Connect()
-		session1 := device1.NewSession("admin", "")
-		session1.Login()
-		session1.SysInfo()
-		session1.SysAbilities()
-		<-*device1.WorkerChan()
-
+		if device, err := sofia.NewDevice("192.168.31.177", "34567", 5, 5); err == nil {
+			if err := device.Connect(); err == nil {
+				session := device.NewSession("admin", "")
+				if err := session.Login(); err == nil {
+					session.SysInfo()
+					session.SysAbilities()
+				}
+			}
+			<-*device.WorkerChan()
+		}
 		pwg.Done()
 	}(&wg)
 
@@ -29,15 +43,17 @@ func main() {
 		fmt.Printf("Starting task 2 ...\n")
 		pwg.Add(1)
 
-		// Create another device
-		device2 := sofia.NewDevice("192.168.31.156", "34567", 5, 5)
-		device2.Connect()
-		session2 := device2.NewSession("admin", "")
-		session2.Login()
-		session2.SysInfo()
-		session2.SysAbilities()
-		<-*device2.WorkerChan()
-
+		// Create a new device
+		if device, err := sofia.NewDevice("192.168.31.156", "34567", 5, 5); err == nil {
+			if err := device.Connect(); err == nil {
+				session := device.NewSession("admin", "")
+				if err := session.Login(); err == nil {
+					session.SysInfo()
+					session.SysAbilities()
+				}
+			}
+			<-*device.WorkerChan()
+		}
 		pwg.Done()
 	}(&wg)
 

@@ -40,7 +40,7 @@ func (device *Device) WorkerChan() *chan error {
 /*
  *
  */
-func NewDevice(host string, port string, timeout uint16, retries uint8) *Device {
+func NewDevice(host string, port string, timeout uint16, retries uint8) (*Device, error) {
 	// Allocate a new device
 	var device *Device = new(Device)
 
@@ -79,7 +79,7 @@ func NewDevice(host string, port string, timeout uint16, retries uint8) *Device 
 		device.rxChan = make(chan error)
 	}
 
-	return device
+	return device, nil
 }
 
 /*
@@ -155,7 +155,7 @@ func (device *Device) worker() {
 		}
 
 		// Decode message header
-		hdr := device.DecodeMessageHeader(hbuf)
+		hdr := DecodeMessageHeader(hbuf)
 
 		// Read rest of message
 		dbuf := make([]byte, hdr.dataLen)
@@ -217,10 +217,25 @@ func (device *Device) worker() {
 /*
  *
  */
-func (device *Device) EncodeMessage(msg *DeviceMessage) {
+func (device *Device) SendMessage(msg *DeviceMessage) error {
 	// Always reset the Tx buffer
 	device.txBuf.Reset()
 
+	// Encode message
+	EncodeMessage(msg, device.txBuf)
+
+	// Send message
+	writeLen, err := device.transport.Write(device.txBuf.Bytes())
+
+	device.logger.Debug("Tx message [", msg.msgId, "], length [", writeLen, "]")
+
+	return err
+}
+
+/*
+ *
+ */
+func EncodeMessage(msg *DeviceMessage, bytesBuf *bytes.Buffer) {
 	// Encode message
 	{
 		encMsgId := make([]byte, 2)
@@ -228,7 +243,7 @@ func (device *Device) EncodeMessage(msg *DeviceMessage) {
 		binary.LittleEndian.PutUint16(encMsgId, uint16(msg.msgId))
 		binary.LittleEndian.PutUint32(encDataLen, msg.dataLen)
 
-		buf := device.txBuf
+		buf := bytesBuf
 		buf.WriteByte(0xFF)                 // Header flag, always 0xFF
 		buf.WriteByte(msg.version)          // Version, usually 0
 		buf.Write([]byte{0x00, 0x00})       // Reserved field 1,2
@@ -254,7 +269,7 @@ func (device *Device) EncodeMessage(msg *DeviceMessage) {
 /*
  *
  */
-func (device *Device) DecodeMessageHeader(buf []byte) DeviceMessageHeader {
+func DecodeMessageHeader(buf []byte) DeviceMessageHeader {
 	// Decode message
 	var hdr DeviceMessageHeader
 	{
@@ -276,7 +291,7 @@ func (device *Device) DecodeMessageHeader(buf []byte) DeviceMessageHeader {
 /*
  *
  */
-func (device *Device) DecodeMessage(buf []byte) DeviceMessage {
+func DecodeMessage(buf []byte) DeviceMessage {
 	// Decode message
 	var msg DeviceMessage
 	{
@@ -294,19 +309,4 @@ func (device *Device) DecodeMessage(buf []byte) DeviceMessage {
 	}
 
 	return msg
-}
-
-/*
- *
- */
-func (device *Device) SendMessage(msg *DeviceMessage) error {
-	// Encode message
-	device.EncodeMessage(msg)
-
-	// Send message
-	writeLen, err := device.transport.Write(device.txBuf.Bytes())
-
-	device.logger.Debug("Tx message [", msg.msgId, "], length [", writeLen, "]")
-
-	return err
 }
