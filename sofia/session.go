@@ -255,3 +255,37 @@ func (session *Session) SysOEMInfo() error {
 
 	return nil
 }
+
+// System OEM info
+func (session *Session) SysAuthorityList() error {
+	// Data for sysinfo
+	data := CmdReqData2{
+		SessionID: session.idStr,
+	}
+
+	// Marshall data as JSON
+	mdata, _ := json.Marshal(data)
+
+	// Build message
+	msg := session.BuildMessage(FULLAUTHORITYLIST_GET, mdata)
+
+	// Send message to device
+	session.device.SendMessage(&msg)
+
+	// Receive message from device
+	resMsg := <-session.rxChan
+
+	fmt.Printf("[%s] Full authorities list %d bytes\n", session.idStr, resMsg.dataLen)
+
+	/*
+		var x map[string]interface{}
+		json.Unmarshal(resMsg.data, &x)
+		dumpJSON("SysAuthorityList", x, "")
+	*/
+
+	var authList SysAuthorityList
+	json.Unmarshal(resMsg.data, &authList)
+	fmt.Printf("%s\n", authList.AuthorityList)
+
+	return nil
+}

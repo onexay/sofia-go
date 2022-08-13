@@ -1,9 +1,10 @@
 package sofia
 
 import (
-	"encoding/json"
+	"bytes"
 	"fmt"
 	"net"
+	"time"
 
 	"github.com/sirupsen/logrus"
 )
@@ -40,26 +41,46 @@ Broadcast UDP sent from factory reset devices on port 34569
 */
 
 type Discovery struct {
-	logger *logrus.Entry // Contextual logger
-	addr   *net.UDPAddr  // Address
-	conn   *net.UDPConn  // UDP connection
+	logger   *logrus.Entry      // Contextual logger
+	txBuf    *bytes.Buffer      // Transmit buffer
+	interval time.Duration      // Interval for discovery broadcast
+	addr     *net.UDPAddr       // Address
+	baddr    *net.UDPAddr       // Broadcast address
+	conn     *net.UDPConn       // Listen connection
+	mQ       chan DeviceMessage // Message Q
 }
 
-func NewDiscovery(port uint16) (*Discovery, error) {
+// Create a new Discovery
+//
+func NewDiscovery(port uint16, interval uint32, logger *logrus.Logger) (*Discovery, error) {
 	// Allocate a new discovery object
 	discovery := new(Discovery)
 
-	// Initialize logger
-	{
+	// Initialize Tx buffer
+	discovery.txBuf = new(bytes.Buffer)
 
-	}
+	// Save discovery interval
+	discovery.interval = time.Second * time.Duration(interval)
 
 	// Initialize address
 	{
+		discovery.baddr = new(net.UDPAddr)
+		discovery.baddr.IP = net.IPv4bcast
+		discovery.baddr.Port = int(port)
+
 		discovery.addr = new(net.UDPAddr)
 		discovery.addr.IP = net.IPv4zero
 		discovery.addr.Port = int(port)
 	}
+
+	// Create channel
+	discovery.mQ = make(chan DeviceMessage, 100)
+
+	// Initialize logger
+	discovery.logger = logger.WithFields(logrus.Fields{
+		"module": "Discovery",
+		"addr":   discovery.baddr.AddrPort().String(),
+	})
 
 	return discovery, nil
 }
@@ -82,50 +103,98 @@ func dumpJSON(name string, amap map[string]interface{}, level string) {
 			fmt.Printf("struct\n")
 			dumpJSON("", v.(map[string]interface{}), level)
 		case float64:
-			fmt.Printf("uint32")
+			fmt.Printf("uint32 `json: \"%s\"`", string(k))
 		default:
-			fmt.Printf("%T", v)
+			fmt.Printf("%T `json: \"%s\"`", v, string(k))
 
 		}
 		fmt.Printf("\n")
 	}
-	fmt.Printf("%s}\n", olevel)
+	if len(olevel) > 0 {
+		fmt.Printf("%s} `json: \"%s\"`\n", olevel, "PH")
+	} else {
+		fmt.Printf("%s}\n", olevel)
+	}
 }
 
-func (discovery *Discovery) Start() {
+// Message Q
+//
+func (discover *Discovery) MQ() *chan DeviceMessage {
+	return &discover.mQ
+}
+
+// Discover task
+//
+func (discovery *Discovery) discover() {
+	// Create a ticker
+	ticker := time.NewTicker(discovery.interval)
+
+	// Build discovery message
+	msg := DeviceMessageHeader{
+		msgId: IPSEARCH_REQ,
+	}
+
+	for {
+		// Reset Tx buffer
+		discovery.txBuf.Reset()
+
+		// Encode message
+		EncodeMessageHeader(&msg, discovery.txBuf)
+
+		// Wait for tick
+		<-ticker.C
+
+		// Send message
+		_, err := discovery.conn.WriteTo(discovery.txBuf.Bytes(), discovery.baddr)
+
+		if err != nil {
+			discovery.logger.Errorf("Tx discovery message fail [%s]", err.Error())
+		} else {
+			discovery.logger.Debugf("Tx discovery message success")
+		}
+	}
+}
+
+// Listener task
+//
+func (discovery *Discovery) listen() {
+	// Create receive buffer
+	buf := make([]byte, 1500)
+
 	// Create a listener
 	conn, err := net.ListenUDP("udp", discovery.addr)
 	if err != nil {
+		discovery.logger.Errorf("Listener create fail [%s]", err.Error())
 		return
 	}
 
-	// Allocate buffer to receive data
-	buf := make([]byte, 1500)
+	discovery.conn = conn
+	discovery.logger.Debugf("Listener create success")
 
 	for {
-		// Read data
-		rlen, raddr, err := conn.ReadFrom(buf)
+		// Read messages
+		_, raddr, err := conn.ReadFrom(buf)
+
 		if err != nil {
-			break
+			discovery.logger.Errorf("Rx discovery message fail [%s]", err.Error())
+			continue
 		}
 
-		fmt.Printf("Rx message from [%s], length [%d]\n", raddr.String(), rlen)
+		// Decode message
+		msg := DecodeMessage(buf)
 
-		// Decode message header
-		hdr := DecodeMessageHeader(buf[:DeviceMessageHeaderLen])
+		if msg.msgId == IPSEARCH_RSP {
+			discovery.logger.Debugf("Rx discovery message success from [%s]", raddr.String())
 
-		fmt.Printf("%b 0x%X %d %d %d\n", hdr.version, hdr.sessionId, hdr.seqNum, hdr.msgId, hdr.dataLen)
-
-		if hdr.dataLen > 0 {
-			// Unmarshal message
-			var x map[string]interface{}
-			if err := json.Unmarshal(buf[DeviceMessageHeaderLen:DeviceMessageHeaderLen+hdr.dataLen-1], &x); err != nil {
-				fmt.Printf(err.Error())
-				continue
-			}
-
-			dumpJSON("X", x, "")
+			discovery.mQ <- msg
 		}
 	}
+}
 
+func (discovery *Discovery) Start() {
+	// Start listener task
+	go discovery.listen()
+
+	// Start discovery task
+	go discovery.discover()
 }

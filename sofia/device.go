@@ -5,7 +5,6 @@ import (
 	"encoding/binary"
 	"io"
 	"net"
-	"os"
 	"sync"
 	"time"
 
@@ -40,7 +39,7 @@ func (device *Device) WorkerChan() *chan error {
 /*
  *
  */
-func NewDevice(host string, port string, timeout uint16, retries uint8) (*Device, error) {
+func NewDevice(host string, port string, timeout uint16, retries uint8, logger *logrus.Logger) (*Device, error) {
 	// Allocate a new device
 	var device *Device = new(Device)
 
@@ -59,11 +58,7 @@ func NewDevice(host string, port string, timeout uint16, retries uint8) (*Device
 
 	// Initialize and setup device logger
 	{
-		newLogger := logrus.New()
-		newLogger.SetFormatter(&logrus.TextFormatter{})
-		newLogger.SetOutput(os.Stdout)
-		newLogger.SetLevel(logrus.DebugLevel)
-		device.logger = newLogger.WithFields(logrus.Fields{"remote": device.host + ":" + device.port})
+		device.logger = logger.WithFields(logrus.Fields{"remote": device.host + ":" + device.port})
 	}
 
 	// Initialize sessions
@@ -230,6 +225,39 @@ func (device *Device) SendMessage(msg *DeviceMessage) error {
 	device.logger.Debug("Tx message [", msg.msgId, "], length [", writeLen, "]")
 
 	return err
+}
+
+/*
+ *
+ */
+func EncodeMessageHeader(msg *DeviceMessageHeader, bytesBuf *bytes.Buffer) {
+	// Encode message
+	{
+		encMsgId := make([]byte, 2)
+		encDataLen := make([]byte, 4)
+		binary.LittleEndian.PutUint16(encMsgId, uint16(msg.msgId))
+		binary.LittleEndian.PutUint32(encDataLen, msg.dataLen)
+
+		buf := bytesBuf
+		buf.WriteByte(0xFF)                 // Header flag, always 0xFF
+		buf.WriteByte(msg.version)          // Version, usually 0
+		buf.Write([]byte{0x00, 0x00})       // Reserved field 1,2
+		buf.WriteByte(msg.sessionId)        // Session ID
+		buf.Write([]byte{0x00, 0x00, 0x00}) // Unknown field 1
+		buf.WriteByte(msg.seqNum)           // Sequence number
+
+		// Use 2 bytes of Unknown field 2 to correlate local session with login
+		if msg.msgId == LOGIN_REQ2 {
+			buf.WriteByte(msg.opaqueId) // Unknown field 2 (first byte)
+		} else {
+			buf.Write([]byte{0x00}) // Unknown field 2 (first byte)
+		}
+
+		buf.Write([]byte{0x00, 0x00, 0x00, 0x00}) // Unknown field 2 (last 4 bytes)
+		buf.Write(encMsgId)                       // Message ID
+		buf.Write(encDataLen)                     // Data length
+		//buf.Write([]byte{0x0A, 0x00})             // Message trailer, always 0x0A,0x00
+	}
 }
 
 /*

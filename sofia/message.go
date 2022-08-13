@@ -2,17 +2,23 @@ package sofia
 
 // Message types
 const (
-	LOGIN_REQ1    = 999
-	LOGIN_REQ2    = 1000
-	LOGIN_RSP     = 1001
-	LOGOUT_REQ    = 1001
-	LOGOUT_RSP    = 1002
-	SYSINFO_REQ   = 1020
-	SYSINFO_RSP   = 1021
-	ABILITY_REQ   = 1360
-	ABILITY_RSP   = 1361
-	KEEPALIVE_REQ = 1006 // 1005 on some devices
-	KEEPALIVE_RSP = 1007 // 1006 on some devices
+	LOGIN_REQ1                = 999
+	LOGIN_REQ2                = 1000
+	LOGIN_RSP                 = 1001
+	LOGOUT_REQ                = 1001
+	LOGOUT_RSP                = 1002
+	SYSINFO_REQ               = 1020
+	SYSINFO_RSP               = 1021
+	ABILITY_REQ               = 1360
+	ABILITY_RSP               = 1361
+	KEEPALIVE_REQ             = 1006 // 1005 on some devices
+	KEEPALIVE_RSP             = 1007 // 1006 on some devices
+	FULLAUTHORITYLIST_GET     = 1470
+	FULLAUTHORITYLIST_GET_RSP = 1471
+	IPSEARCH_REQ              = 1530
+	IPSEARCH_RSP              = 1531
+	IP_SET_REQ                = 1532
+	IP_SET_RSP                = 1533
 )
 
 /*
@@ -69,6 +75,14 @@ type DeviceMessage struct {
 	data      []byte // Payload
 }
 
+func (msg DeviceMessage) ID() uint16 {
+	return msg.msgId
+}
+
+func (msg DeviceMessage) DataLen() uint32 {
+	return msg.dataLen
+}
+
 // Login request data
 type LoginReqData struct {
 	EncryptType string // Encryption type, always MD5
@@ -93,9 +107,20 @@ type CmdReqData struct {
 	SessionID string // Session ID
 }
 
+// Generic request data (format 2)
+type CmdReqData2 struct {
+	SessionID string // Session ID
+}
+
 // Generic response data
 type CmdResData struct {
 	Name      string `json: "Name"`      // Command name
+	Ret       uint32 `json: "Ret"`       // Return code
+	SessionID string `json: "SessionID"` // Session ID
+}
+
+// Generic response data (format 2)
+type CmdResData2 struct {
 	Ret       uint32 `json: "Ret"`       // Return code
 	SessionID string `json: "SessionID"` // Session ID
 }
@@ -258,23 +283,36 @@ type OEMInfo struct {
 	SessionID string
 }
 
-type SysIPSetData struct {
-	HostIP        string
-	HttpPort      uint32
-	MAC           string
-	TCPPort       uint32
-	TransferPlan  uint32
-	HostName      string
-	UseHSDownLoad bool
-	TCPMaxConn    uint32
-	DvrMac        string
-	EncryptType   uint32
-	GateWay       string
-	MaxBps        uint32
-	MonMode       uint32
-	Submask       string
-	Password      string
-	SSLPort       uint32
-	UDPPort       uint32
-	Username      string
+type SysIPSearchData struct {
+	Ret       uint32 `json: "Ret"`
+	SessionID string `json: "SessionID"`
+	Name      string `json: "Name"`
+	NetWork   struct {
+		SN            string `json: "SN"`
+		UDPPort       uint32 `json: "UDPPort"`
+		OtherFunction string `json: "OtherFunction"`
+		HostName      string `json: "HostName"`
+		HttpPort      uint32 `json: "HttpPort"`
+		MAC           string `json: "MAC"`
+		TCPMaxConn    uint32 `json: "TCPMaxConn"`
+		Version       string `json: "Version"`
+		DeviceType    uint32 `json: "DeviceType"`
+		GateWay       string `json: "GateWay"`
+		HostIP        string `json: "HostIP"`
+		MaxBps        uint32 `json: "MaxBps"`
+		TCPPort       uint32 `json: "TCPPort"`
+		TransferPlan  string `json: "TransferPlan"`
+		UseHSDownLoad bool   `json: "UseHSDownLoad"`
+		MonMode       string `json: "MonMode"`
+		SSLPort       uint32 `json: "SSLPort"`
+		Submask       string `json: "Submask"`
+		BuildDate     string `json: "BuildDate"`
+	} `json: "NetWork.NetCommon"`
+}
+
+type SysAuthorityList struct {
+	SessionID     string
+	AuthorityList []string
+	Name          string
+	Ret           uint32
 }
